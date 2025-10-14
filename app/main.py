@@ -5,11 +5,12 @@ import io
 from .cleaning import clean_sales_df
 from .db import init_db, engine, sales_table
 from sqlalchemy import insert
-
+from .db import init_db, ensure_total_amount_column, engine, sales_table
 app = FastAPI(title="AI Data Analytics - Phase1")
 
 # Ensure DB exists
 init_db()
+ensure_total_amount_column()
 
 @app.get("/")
 def read_root():
@@ -36,7 +37,8 @@ async def upload_csv(file: UploadFile = File(...)):
                 region = r.get("region"),
                 product = r.get("product"),
                 quantity = int(r.get("quantity") or 0),
-                price = float(r.get("price") or 0.0)
+                price = float(r.get("price") or 0.0),
+                total_amount = float(r.get("total_amount") or 0.0)
             )
             conn.execute(stmt)
         conn.commit()
