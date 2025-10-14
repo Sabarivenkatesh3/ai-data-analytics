@@ -5,6 +5,7 @@ import io
 from .cleaning import clean_sales_df
 from .db import init_db, engine, sales_table
 from sqlalchemy import insert
+from .insights import load_df, summarize_overall, format_text_summary
 from .db import init_db, ensure_total_amount_column, engine, sales_table
 app = FastAPI(title="AI Data Analytics - Phase1")
 
@@ -15,6 +16,15 @@ ensure_total_amount_column()
 @app.get("/")
 def read_root():
     return {"msg": "AI Data Analytics - Phase 1 running. POST /upload-csv to send file."}
+
+@app.get("/insights")
+def get_insights(days: int = 7, mode: str = "recent"):
+    df = load_df()
+    summary = summarize_overall(df, days=days, mode=mode)
+    text = format_text_summary(summary)
+    return {"summary": summary, "text": text}
+
+
 
 @app.post("/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
