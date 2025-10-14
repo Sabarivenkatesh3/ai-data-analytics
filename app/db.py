@@ -1,44 +1,56 @@
 # app/db.py
-from sqlalchemy import create_engine, MetaData, Table, Column, Integer, String, Float, text
-from sqlalchemy.exc import OperationalError
+import os
+import re
+import sqlite3
+import pandas as pd
 
-DB_URL = "sqlite:///./data/cleaned_data.db"
-engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
-metadata = MetaData()
+DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
 
-# Define table including the new column (so SQLAlchemy metadata knows about it)
-sales_table = Table(
-    "sales", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("order_id", Integer),
-    Column("date", String),
-    Column("region", String),
-    Column("product", String),
-    Column("quantity", Integer),
-    Column("price", Float),
-    Column("total_amount", Float)  # new column
-)
 
+# -----------------------------------------------------------
+# ✅ Initialize or create the database
+# -----------------------------------------------------------
 def init_db():
-    try:
-        metadata.create_all(engine)
-    except OperationalError as e:
-        print("DB init error:", e)
+    """Initialize SQLite database if not exists."""
+    if not os.path.exists(DB_PATH):
+        conn = sqlite3.connect(DB_PATH)
+        conn.close()
+        print(f"[DB] Created new database at {DB_PATH}")
+    else:
+        print(f"[DB] Using existing database at {DB_PATH}")
 
-def ensure_total_amount_column():
-    """
-    Ensure the 'total_amount' column exists in the existing SQLite table.
-    We attempt to SELECT it; if that fails we ALTER TABLE to add it.
-    """
+
+# -----------------------------------------------------------
+# ✅ Create table from DataFrame
+# -----------------------------------------------------------
+def create_table_from_df(df: pd.DataFrame, table_name: str, if_exists="replace"):
+    """Save a pandas DataFrame into SQLite DB."""
     try:
-        with engine.begin() as conn:
-            # Try selecting the column — if it fails an exception is raised
-            try:
-                conn.execute(text("SELECT total_amount FROM sales LIMIT 1"))
-            except Exception:
-                # Column doesn't exist, so add it.
-                # Note: SQLite allows adding a column with ALTER TABLE ... ADD COLUMN
-                conn.execute(text("ALTER TABLE sales ADD COLUMN total_amount FLOAT"))
-                print("Added total_amount column to sales table.")
+        conn = sqlite3.connect(DB_PATH)
+        df.to_sql(table_name, conn, if_exists=if_exists, index=False)
+        rows = df.shape[0]
+        conn.close()
+        return {"status": "ok", "table": table_name, "rows": rows}
     except Exception as e:
-        print("Error ensuring column:", e)
+        return {"status": "error", "detail": str(e)}
+
+
+# -----------------------------------------------------------
+# ✅ List all tables in DB
+# -----------------------------------------------------------
+def list_tables():
+    """Return list of all tables in DB."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return tables
+
+
+# -----------------------------------------------------------
+# ✅ Sanitize table name
+# -----------------------------------------------------------
+def sanitize_table_name(name: str) -> str:
+    """Make a safe table name from filename."""
+    return re.sub(r"[^0-9a-zA-Z_]+", "_", name).lower()
