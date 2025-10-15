@@ -34,6 +34,34 @@ def create_table_from_df(df: pd.DataFrame, table_name: str, if_exists="replace")
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
+def get_db_path():
+    """
+    Return the absolute path to the sqlite DB file.
+    """
+    # adjust if your DB path variable name is different
+    try:
+        return DB_PATH
+    except NameError:
+        # fallback to legacy location inside project
+        return os.path.join(os.path.dirname(__file__), "data.db")
+
+def read_table(table_name: str, limit: int = 1000) -> pd.DataFrame:
+    """
+    Read a table from the sqlite DB and return a pandas DataFrame (up to `limit` rows).
+    """
+    dbp = get_db_path()
+    if not os.path.exists(dbp):
+        raise FileNotFoundError(f"Database not found at {dbp}")
+
+    safe_name = sanitize_table_name(table_name)
+    conn = sqlite3.connect(dbp)
+    try:
+        query = f"SELECT * FROM \"{safe_name}\" LIMIT {int(limit)}"
+        df = pd.read_sql_query(query, conn)
+    finally:
+        conn.close()
+    return df
+
 
 # -----------------------------------------------------------
 # ✅ List all tables in DB

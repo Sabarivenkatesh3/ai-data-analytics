@@ -1,7 +1,7 @@
 # streamlit_app.py (replace existing)
 import streamlit as st
 import pandas as pd
-from app.db import engine, list_tables, read_table
+from app.db import list_tables, read_table
 from app.insights import summarize_table
 
 def main():
