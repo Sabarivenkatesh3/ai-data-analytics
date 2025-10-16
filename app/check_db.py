@@ -1,43 +1,48 @@
 # app/check_db.py
 import sys
 import pathlib
+import sqlite3
 
-# Ensure project root is on sys.path so "app" package imports work when running as a script.
+# Ensure project root is on sys.path
 project_root = pathlib.Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from app.db import engine, sales_table
-from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
+from app.db import DB_PATH, list_tables
 
-def print_rows(limit: int | None = None):
-    try:
-        stmt = select(sales_table)
-        with engine.connect() as conn:
-            result = conn.execute(stmt)   # keep Result object to read keys()
-            rows = result.fetchall()      # list of Row objects
-            cols = result.keys()          # column names (from Result)
-
-            if not rows:
-                print("No rows found in 'sales' table.")
-                return
-
-            print("Columns:", cols)
-            count = 0
-            for row in rows:
-                # row._mapping is a dict-like mapping of column->value (safe)
-                print(dict(row._mapping))
-                count += 1
-                if limit and count >= limit:
-                    break
-
-            print(f"\nTotal rows printed: {count}")
-
-    except SQLAlchemyError as e:
-        print("DB error:", e)
+def print_tables():
+    """Print all tables in the database"""
+    tables = list_tables()
+    
+    if not tables:
+        print("No tables found in database.")
+        return
+    
+    print(f"\n📊 Tables in database ({DB_PATH}):")
+    print("=" * 60)
+    
+    for table in tables:
+        print(f"\n🔹 Table: {table}")
+        
+        # Get sample rows
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute(f'SELECT * FROM "{table}" LIMIT 5')
+        rows = cursor.fetchall()
+        
+        # Get column names
+        cursor.execute(f'PRAGMA table_info("{table}")')
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        print(f"   Columns: {columns}")
+        print(f"   Sample rows: {len(rows)}")
+        
+        for row in rows:
+            print(f"   {dict(zip(columns, row))}")
+        
+        conn.close()
+    
+    print("\n" + "=" * 60)
 
 if __name__ == "__main__":
-    # Recommend running with: python -m app.check_db  (from project root)
-    # But this file also works with: python app/check_db.py (from project root)
-    print_rows()
+    print_tables()
