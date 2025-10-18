@@ -31,7 +31,7 @@ class IntelligentDataCleaner:
             )
         
         genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-1.5-flash')  # or 'gemini-1.5-pro'
         
         print("✅ Connected to Google Gemini AI")
     
@@ -162,7 +162,7 @@ class IntelligentDataCleaner:
         }
         
         for pattern_name, regex in pattern_checks.items():
-            if sample.str.contains(regex, regex=True, case=False, na=False).any():
+            if sample.astype(str).str.contains(regex, regex=False, case=False, na=False).any():
                 patterns.append(pattern_name)
         
         # Check if mostly numeric (even if stored as string)

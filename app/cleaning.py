@@ -201,7 +201,17 @@ def detect_and_clean(
     for col in df.columns:
         if _is_likely_date_series(df[col]):
             try:
-                df[col] = pd.to_datetime(df[col], errors="coerce", infer_datetime_format=True)
+                for fmt in ['%Y-%m-%d', '%d-%m-%Y', '%m/%d/%Y', '%d/%m/%Y', '%Y-%m-%d %H:%M:%S', '%d-%m-%Y %H:%M']:
+                    try:
+                        df[col] = pd.to_datetime(df[col], format=fmt, errors='coerce')
+                        if df[col].notna().any():
+                            break
+                    except:
+                        continue
+                else:
+                    # If no format works, let pandas infer (without deprecated param)
+                    df[col] = pd.to_datetime(df[col], errors='coerce', dayfirst=True)
+
                 date_cols.append(col)
                 report["columns_cleaned"][col] = "date"
             except Exception as e:
