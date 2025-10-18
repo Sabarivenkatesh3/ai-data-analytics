@@ -10,6 +10,9 @@ import requests
 from io import BytesIO
 import sys
 from pathlib import Path
+# At top of streamlit_uploader.py
+import warnings
+warnings.filterwarnings('ignore', message='.*Arrow.*')
 from dotenv import load_dotenv  # ADD THIS
 import os
 
