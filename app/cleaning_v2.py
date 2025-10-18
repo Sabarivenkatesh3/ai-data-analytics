@@ -7,7 +7,7 @@ Combines rule-based cleaning with AI analysis
 import pandas as pd
 from typing import Tuple, Dict, Any
 from .cleaning import detect_and_clean as basic_clean
-from .ai_cleaning import AIDataAnalyzer, apply_ai_cleaning
+from .ai_cleaning_enhanced import AIDataAnalyzer, apply_ai_cleaning
 
 
 def ai_enhanced_clean(
