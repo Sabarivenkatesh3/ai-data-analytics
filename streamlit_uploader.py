@@ -10,15 +10,16 @@ import requests
 from io import BytesIO
 import sys
 from pathlib import Path
-# At top of streamlit_uploader.py
 import warnings
-warnings.filterwarnings('ignore', message='.*Arrow.*')
-from dotenv import load_dotenv  # ADD THIS
 import os
+from dotenv import load_dotenv
 
-load_dotenv()  # ADD THIS
+# Suppress Arrow serialization warnings
+warnings.filterwarnings('ignore', message='.*Arrow.*')
+warnings.filterwarnings('ignore', category=UserWarning)
 
-# Rest of your code...
+# Load environment variables
+load_dotenv()
 
 # Add project root to path
 project_root = Path(__file__).resolve().parent
@@ -40,6 +41,35 @@ os.makedirs("data/raw", exist_ok=True)
 os.makedirs("data/cleaned", exist_ok=True)
 
 
+def fix_dataframe_for_streamlit(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fix DataFrame types for Streamlit Arrow compatibility.
+    Prevents serialization errors.
+    """
+    df = df.copy()
+    
+    for col in df.columns:
+        if df[col].dtype == 'object':
+            try:
+                # Try to convert to numeric first
+                numeric_conversion = pd.to_numeric(df[col], errors='coerce')
+                # If more than 50% are numeric, keep as numeric
+                if numeric_conversion.notna().sum() > len(df) * 0.5:
+                    df[col] = numeric_conversion
+                else:
+                    # Convert to string to avoid mixed types
+                    df[col] = df[col].fillna('').astype(str)
+            except:
+                # Fallback: convert to string
+                df[col] = df[col].fillna('').astype(str)
+        
+        # Handle datetime columns - convert to string for display
+        elif pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].astype(str)
+    
+    return df
+
+
 def main():
     st.title("🚀 AI Data Analytics - Upload ANY Dataset")
     st.markdown("---")
@@ -56,6 +86,7 @@ def main():
         st.markdown("""
         - ✅ Upload ANY CSV/Excel
         - 🧹 Auto-clean data
+        - 🤖 AI-powered analysis
         - 📊 Generate insights
         - 💾 Download cleaned files
         - 🔍 View all tables
@@ -70,9 +101,10 @@ def main():
         Upload **any CSV or Excel file** from your computer. The system will:
         1. ✨ Automatically detect data types
         2. 🧹 Clean the data intelligently
-        3. 💾 Save to database
-        4. 📊 Generate insights
-        5. 📥 Create downloadable cleaned file
+        3. 🤖 Use AI for smart analysis (if API key available)
+        4. 💾 Save to database
+        5. 📊 Generate insights
+        6. 📥 Create downloadable cleaned file
         """)
 
         # File uploader
@@ -124,7 +156,9 @@ def main():
                         col3.metric("Missing Values", int(df.isna().sum().sum()))
 
                         with st.expander("👀 Preview Original Data (first 10 rows)"):
-                            st.dataframe(df.head(10))
+                            # Fix DataFrame before displaying
+                            df_display = fix_dataframe_for_streamlit(df.head(10))
+                            st.dataframe(df_display)
 
                         # Save raw file
                         raw_path = os.path.join("data/raw", uploaded_file.name)
@@ -152,11 +186,15 @@ def main():
                                 cleaner = IntelligentDataCleaner(api_key=api_key)
                                 cleaned_df, ai_report = cleaner.analyze_and_clean(df, dataset_name=safe_name)
 
-                                # Convert AI report to expected format (best-effort)
+                                # Convert AI report to expected format
                                 report = {
-                                    "operations": ai_report.get("ai_analysis", {}).get("recommended_operations", []),
+                                    "operations": [
+                                        f"{op.get('column')}: {op.get('action')} - {op.get('issue')}"
+                                        for op in ai_report.get("ai_analysis", {}).get("recommended_operations", [])
+                                    ],
                                     "summary": ai_report.get("summary", {}),
-                                    "issues_found": ai_report.get("issues_found", []) or []
+                                    "issues_found": [],
+                                    "model_used": ai_report.get("model_used", "Unknown")
                                 }
                             else:
                                 st.warning("⚠️ No API key found. Using standard cleaning...")
@@ -168,8 +206,7 @@ def main():
                                     outlier_threshold=outlier_threshold
                                 )
                         except Exception as e:
-                            # If AI cleaner import or execution fails, fall back to standard cleaning
-                            st.warning(f"⚠️ AI cleaning failed or unavailable: {e}. Using standard cleaning...")
+                            st.warning(f"⚠️ AI cleaning failed: {e}. Using standard cleaning...")
                             cleaned_df, report = detect_and_clean(
                                 df,
                                 file_basename=safe_name,
@@ -192,6 +229,10 @@ def main():
                         quality_score = (1 - cleaned_df.isna().sum().sum() / cleaned_df.size) * 100 if cleaned_df.size > 0 else 0
                         col4.metric("Quality Score", f"{quality_score:.1f}%")
 
+                        # Show model used if AI was used
+                        if report.get('model_used'):
+                            st.info(f"🤖 AI Model Used: **{report['model_used']}**")
+
                         # Cleaning report
                         with st.expander("📋 Detailed Cleaning Report"):
                             st.write("**Operations Performed:**")
@@ -203,11 +244,16 @@ def main():
                                 for issue in report.get('issues_found', []):
                                     st.write(f"- {issue}")
 
-                            st.json(report.get('summary', {}))
+                            if isinstance(report.get('summary'), dict):
+                                st.json(report.get('summary', {}))
+                            else:
+                                st.text(report.get('summary', ''))
 
-                        # Preview cleaned data
+                        # Preview cleaned data - FIX ARROW SERIALIZATION HERE
                         with st.expander("👀 Preview Cleaned Data (first 20 rows)"):
-                            st.dataframe(cleaned_df.head(20))
+                            # Apply fix before displaying
+                            cleaned_display = fix_dataframe_for_streamlit(cleaned_df.head(20))
+                            st.dataframe(cleaned_display, use_container_width=True)
 
                         # Save to database
                         db_result = create_table_from_df(cleaned_df, table_name=safe_name, if_exists="replace")
@@ -222,9 +268,10 @@ def main():
                         cleaned_df.to_csv(cleaned_path, index=False)
 
                         # Download button
+                        csv_data = cleaned_df.to_csv(index=False).encode('utf-8')
                         st.download_button(
                             label="📥 Download Cleaned CSV",
-                            data=cleaned_df.to_csv(index=False).encode('utf-8'),
+                            data=csv_data,
                             file_name=f"{safe_name}_cleaned.csv",
                             mime="text/csv"
                         )
@@ -280,6 +327,9 @@ def main():
 
         try:
             df = read_table(selected_table, limit=limit)
+            
+            # FIX: Apply Arrow serialization fix
+            df_display = fix_dataframe_for_streamlit(df)
 
             # Basic stats
             st.subheader(f"📈 Dataset: {selected_table}")
@@ -290,9 +340,9 @@ def main():
             col3.metric("Memory Usage", f"{mem_kb:.1f} KB")
             col4.metric("Missing Values", int(df.isna().sum().sum()))
 
-            # Data preview
+            # Data preview - use fixed DataFrame
             st.subheader("📄 Data Preview")
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df_display, use_container_width=True)
 
             # Column info
             with st.expander("📋 Column Details"):
@@ -322,12 +372,12 @@ def main():
                     with st.expander(f"🔤 {col}"):
                         st.write(f"Missing: {info.get('nulls', 0)}")
                         top_vals = info.get('top_values', {})
-                        # convert top values dict to series if needed
                         if isinstance(top_vals, dict):
                             top_series = pd.Series(top_vals)
                         else:
                             top_series = pd.Series(top_vals)
-                        st.bar_chart(top_series)
+                        if not top_series.empty:
+                            st.bar_chart(top_series)
 
             # Date columns
             if summary.get('dates'):
@@ -336,15 +386,17 @@ def main():
                 st.dataframe(date_df, use_container_width=True)
 
             # Download
+            csv_data = df.to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Download This Data",
-                data=df.to_csv(index=False).encode('utf-8'),
+                data=csv_data,
                 file_name=f"{selected_table}_export.csv",
                 mime="text/csv"
             )
 
         except Exception as e:
             st.error(f"❌ Error loading table: {str(e)}")
+            st.exception(e)
 
     # ===================================================================
     # PAGE 3: SYSTEM INFO
@@ -372,22 +424,42 @@ def main():
             st.metric("Cleaned Files", len(cleaned_files))
 
         st.subheader("🔧 Configuration")
+        
+        # Check API key status
+        api_key_status = "✅ Configured" if os.getenv("GEMINI_API_KEY") else "❌ Not found"
+        
         st.code(f"""
 Database Path: app/data.db
 Raw Files: data/raw/
 Cleaned Files: data/cleaned/
+API Key Status: {api_key_status}
         """)
 
         st.subheader("📚 Supported Features")
         features = {
             "File Types": "CSV, Excel (.xlsx, .xls)",
             "Auto-Detection": "Dates, Numbers, Currency, Percentages, Text, Booleans",
+            "AI Models": "gemini-2.5-flash, gemini-2.5-pro, gemini-2.0-flash (auto-fallback)",
             "Cleaning": "Duplicates, Outliers, Missing Values, Whitespace, Type Conversion",
             "Export": "Cleaned CSV, Database Tables",
             "Analysis": "Summary Statistics, Insights, Visualizations"
         }
         for key, value in features.items():
             st.write(f"**{key}:** {value}")
+        
+        # Test AI connection
+        if st.button("🧪 Test AI Connection"):
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                st.error("❌ No API key found in environment")
+            else:
+                try:
+                    from app.ai_cleaning_enhanced import IntelligentDataCleaner
+                    with st.spinner("Testing AI connection..."):
+                        cleaner = IntelligentDataCleaner(api_key=api_key)
+                        st.success(f"✅ Successfully connected to: {cleaner.current_model_name}")
+                except Exception as e:
+                    st.error(f"❌ Failed to connect: {str(e)}")
 
 
 if __name__ == "__main__":

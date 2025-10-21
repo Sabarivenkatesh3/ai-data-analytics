@@ -2,6 +2,7 @@
 """
 Enhanced AI-Powered Data Cleaning System
 Uses Gemini AI to intelligently analyze and clean any dataset
+WITH AUTOMATIC MODEL FALLBACK
 """
 
 import pandas as pd
@@ -12,6 +13,7 @@ import google.generativeai as genai
 from typing import Dict, Any, List, Tuple, Callable
 import numpy as np
 from datetime import datetime
+import warnings
 
 
 class IntelligentDataCleaner:
@@ -19,6 +21,16 @@ class IntelligentDataCleaner:
     AI-powered data cleaner that analyzes datasets and generates
     custom cleaning strategies on the fly
     """
+
+    # List of models to try in order (from best to fallback)
+    AVAILABLE_MODELS = [
+        'gemini-2.5-flash',
+        'gemini-2.5-pro',
+        'gemini-2.0-flash-exp',
+        'gemini-2.0-flash',
+        'gemini-flash-latest',
+        'gemini-pro-latest'
+    ]
 
     def __init__(self, api_key: str = None):
         """Initialize with Google Gemini API"""
@@ -31,10 +43,63 @@ class IntelligentDataCleaner:
             )
 
         genai.configure(api_key=self.api_key)
-        # Note: API surface may vary; adjust model selection if needed.
-        self.model = genai.GenerativeModel('gemini-1.5-flash')  # or 'gemini-1.5-pro'
+        
+        # Try to initialize with the best available model
+        self.model = None
+        self.current_model_name = None
+        self._initialize_model()
 
-        print("✅ Connected to Google Gemini AI")
+    def _initialize_model(self):
+        """Try to initialize with the first available model"""
+        print("🔍 Detecting available Gemini models...")
+        
+        for model_name in self.AVAILABLE_MODELS:
+            try:
+                self.model = genai.GenerativeModel(model_name)
+                # Test if model works with a simple prompt
+                test_response = self.model.generate_content("Say 'OK'")
+                if test_response and test_response.text:
+                    self.current_model_name = model_name
+                    print(f"✅ Connected to Google Gemini AI: {model_name}")
+                    return
+            except Exception as e:
+                print(f"⚠️  Model {model_name} not available: {str(e)[:50]}...")
+                continue
+        
+        # If no model works, raise error
+        raise ValueError(
+            "❌ Could not connect to any Gemini model. "
+            "Please check your API key and internet connection."
+        )
+
+    def _try_ai_call_with_fallback(self, prompt: str) -> str:
+        """Try AI call with automatic model fallback"""
+        last_error = None
+        
+        for model_name in self.AVAILABLE_MODELS:
+            try:
+                # Try current model first, then fallbacks
+                if model_name == self.current_model_name and self.model:
+                    response = self.model.generate_content(prompt)
+                else:
+                    temp_model = genai.GenerativeModel(model_name)
+                    response = temp_model.generate_content(prompt)
+                
+                if response and response.text:
+                    # If we switched models, update current
+                    if model_name != self.current_model_name:
+                        self.current_model_name = model_name
+                        self.model = genai.GenerativeModel(model_name)
+                        print(f"🔄 Switched to model: {model_name}")
+                    return response.text.strip()
+                    
+            except Exception as e:
+                last_error = e
+                print(f"⚠️  Model {model_name} failed: {str(e)[:50]}...")
+                continue
+        
+        # If all models failed, raise the last error
+        raise Exception(f"All models failed. Last error: {last_error}")
 
     def analyze_and_clean(self, df: pd.DataFrame, dataset_name: str = "dataset") -> Tuple[pd.DataFrame, Dict[str, Any]]:
         """
@@ -75,6 +140,7 @@ class IntelligentDataCleaner:
             "ai_analysis": ai_analysis,
             "cleaning_strategy": cleaning_strategy,
             "validation": validation,
+            "model_used": self.current_model_name,
             "summary": self._generate_summary(df, cleaned_df, ai_analysis, validation)
         }
 
@@ -163,15 +229,17 @@ class IntelligentDataCleaner:
             "missing_indicators": r'\b(?:na|n/a|null|none|nan|missing|unknown)\b'
         }
 
-        # Try each pattern against the sample
-        for pattern_name, regex in pattern_checks.items():
-            try:
-                matches = sample.str.contains(regex, regex=True, case=False, na=False)
-                if matches.any():
-                    patterns.append(pattern_name)
-            except Exception:
-                # Skip problematic regex checks
-                continue
+        # FIXED: Suppress regex match group warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            
+            for pattern_name, regex in pattern_checks.items():
+                try:
+                    matches = sample.str.contains(regex, regex=True, case=False, na=False)
+                    if matches.any():
+                        patterns.append(pattern_name)
+                except Exception:
+                    continue
 
         # Check if mostly numeric (even if stored as string)
         try:
@@ -183,7 +251,7 @@ class IntelligentDataCleaner:
         except Exception:
             pass
 
-        # Check for cardinality / categorical signals using full series length where reasonable
+        # Check for cardinality / categorical signals
         series_len = len(series)
         unique_count = series.nunique(dropna=True) if series_len > 0 else 0
         unique_ratio = unique_count / series_len if series_len > 0 else 0.0
@@ -252,7 +320,7 @@ class IntelligentDataCleaner:
             length_std = (lengths.std() / lengths.mean()) if lengths.mean() > 0 else 0
             quality["consistency"] = max(0, 100 - (length_std * 10))
 
-        # Validity: Basic placeholder (can be extended)
+        # Validity
         quality["validity"] = 100 - (series.isna().sum() / total * 100) if total > 0 else 0
 
         return quality
@@ -336,8 +404,7 @@ Analyze this dataset and provide a JSON response with cleaning recommendations.
 For each problematic column, specify:
 1. What's wrong with it
 2. Exact transformation needed
-3. Python code to fix it (if custom parsing needed)
-4. Priority (high/medium/low)
+3. Priority (high/medium/low)
 
 Respond with ONLY valid JSON in this format:
 {{
@@ -346,37 +413,27 @@ Respond with ONLY valid JSON in this format:
     {{
       "column": "column_name",
       "issue": "description",
-      "action": "remove_duplicates|fill_missing|parse_format|convert_type|remove_outliers|standardize_values",
+      "action": "parse_format|fill_missing|convert_type",
       "details": {{
-        "method": "specific method to use",
-        "parameters": {{ }},
-        "custom_code": "Python code if needed (optional)"
+        "method": "specific method to use"
       }},
-      "priority": "high|medium|low",
-      "expected_improvement": "What will improve"
+      "priority": "high|medium|low"
     }}
   ],
-  "priority_order": ["high_priority_column1", "high_priority_column2"],
+  "priority_order": ["high_priority_column1"],
   "estimated_quality_improvement": "X%"
-}}
-
-Focus on:
-- Parsing non-standard formats (K+, ratings, currency)
-- Converting data types correctly
-- Handling missing values intelligently
-- Removing duplicates and outliers
-- Standardizing inconsistent formats"""
+}}"""
 
         try:
-            # Call Gemini API
-            response = self.model.generate_content(prompt)
-            response_text = response.text.strip()
+            # Call Gemini API with automatic fallback
+            response_text = self._try_ai_call_with_fallback(prompt)
 
             # Extract JSON from response
             json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
             if json_match:
                 ai_response = json.loads(json_match.group())
                 print(f"✅ AI Analysis Complete: {len(ai_response.get('recommended_operations', []))} operations recommended")
+                print(f"🤖 Model used: {self.current_model_name}")
                 return ai_response
             else:
                 print("⚠️  AI response not in expected format, using fallback analysis")
@@ -472,7 +529,7 @@ Focus on:
             action = operation.get("action")
             details = operation.get("details", {}) or {}
 
-            if not col:
+            if not col or col not in df.columns:
                 continue
 
             if col not in strategy:
@@ -491,7 +548,6 @@ Focus on:
                     strategy[col].append(self._remove_currency)
 
             elif action == "fill_missing":
-                # use a closure to capture the series (df[col]) at the time of strategy creation
                 strategy[col].append(lambda v, s=df[col]: self._intelligent_fill(v, s))
 
             elif action == "convert_type":
@@ -499,19 +555,7 @@ Focus on:
                 strategy[col].append(lambda v, t=target_type: self._convert_type(v, t))
 
             elif action == "remove_outliers":
-                # outlier removal expects a series-level operation; wrap it to operate on element-level
                 strategy[col].append(self._remove_outliers)
-
-            # Execute custom code if provided
-            custom_code = details.get("custom_code")
-            if custom_code:
-                try:
-                    exec_globals = {"pd": pd, "np": np}
-                    exec(custom_code, exec_globals)
-                    if "clean_function" in exec_globals and callable(exec_globals["clean_function"]):
-                        strategy[col].append(exec_globals["clean_function"])
-                except Exception as e:
-                    print(f"⚠️  Could not execute custom code for {col}: {e}")
 
         return strategy
 
@@ -525,23 +569,19 @@ Focus on:
 
             for func in functions:
                 try:
-                    # If function expects series (like outlier removal), allow that usage
-                    # We'll attempt element-wise apply first; if result is not a Series, keep as-is
                     try:
                         result = df[col].apply(func)
                         if isinstance(result, pd.Series):
                             df[col] = result
                         else:
-                            # If the function returned a series-like object, try assigning
                             df[col] = result
                     except Exception:
-                        # Fallback: pass entire series (useful for functions like _remove_outliers)
                         try:
                             new_series = func(df[col])
                             if isinstance(new_series, pd.Series):
                                 df[col] = new_series
                         except Exception as e:
-                            print(f"    ⚠️  Operation failed on series: {e}")
+                            print(f"    ⚠️  Operation failed: {e}")
                 except Exception as e:
                     print(f"    ⚠️  Operation failed: {e}")
 
@@ -562,7 +602,6 @@ Focus on:
             multiplier = 1000 if match.group(2) == 'K' else 1000000
             return num * multiplier
 
-        # Try to extract plain number
         match = re.search(r'(\d+\.?\d*)', text)
         return float(match.group(1)) if match else np.nan
 
@@ -602,12 +641,10 @@ Focus on:
         if pd.notna(value):
             return value
 
-        # For numeric columns, use median
         numeric_series = pd.to_numeric(series, errors='coerce')
         if numeric_series.notna().sum() > 0:
             return numeric_series.median()
 
-        # For categorical, use mode
         mode_series = series.mode()
         if len(mode_series) > 0:
             return mode_series.iloc[0]
@@ -653,7 +690,6 @@ Focus on:
             "metrics": {}
         }
 
-        # Calculate improvements
         original_nulls = int(original_df.isna().sum().sum())
         cleaned_nulls = int(cleaned_df.isna().sum().sum())
 
@@ -682,6 +718,7 @@ Focus on:
             "=" * 80,
             "",
             f"📊 Dataset: {original_df.shape[0]} rows × {original_df.shape[1]} columns",
+            f"🤖 AI Model: {self.current_model_name}",
             f"🤖 AI Assessment: {ai_analysis.get('overall_assessment', 'N/A')}",
             f"🔧 Operations Performed: {len(ai_analysis.get('recommended_operations', []))}",
             "",
@@ -697,14 +734,9 @@ Focus on:
         return "\n".join(lines)
 
 
-# ============ CONVENIENCE FUNCTION ============
-
 def clean_with_ai(df: pd.DataFrame, dataset_name: str = "dataset", api_key: str = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
     One-line function to clean any dataset with AI
-
-    Usage:
-        cleaned_df, report = clean_with_ai(raw_df)
     """
     cleaner = IntelligentDataCleaner(api_key=api_key)
     return cleaner.analyze_and_clean(df, dataset_name)
